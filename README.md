@@ -1,2 +1,61 @@
 # opencode-termux-native
-Run OpenCode natively on Termux (aarch64) — no proot, no root. glibc Bun binary + patchelf'd interpreter to the Termux glibc loader + an LD_PRELOAD DNS shim (the same recipe as Claude Code). One-command installer.
+
+Run **[OpenCode](https://opencode.ai) natively on Termux** (Android · aarch64) — **no proot, no root.**
+
+OpenCode ships a **glibc-dynamic Bun binary** for `linux-arm64` — the same shape as Claude Code. On Termux it won't run as-is (its interpreter `/lib/ld-linux-aarch64.so.1` doesn't exist, and `/etc/resolv.conf` can't exist). Two small steps fix that.
+
+> Runtime only — no account data. Add providers with `opencode providers`.
+
+## How it works
+
+| Piece | Role |
+|-------|------|
+| **Termux glibc repo** (`glibc`, `patchelf-glibc`, `binutils-glibc`) | glibc runtime + loader under `$PREFIX/glibc` |
+| **patchelf the interpreter** | OpenCode's binary is `0x10000`-aligned and patchelf-clean (Bun, not Go), so we just repoint its interpreter to Termux's glibc loader — no align-fix, no loader-direct. The launcher re-applies this after a self-update. |
+| **`fix_resolv.c` → `claude-resolvfix.so`** | `LD_PRELOAD` shim: redirects `/etc/resolv.conf` reads to `$PREFIX/etc/resolv.conf` (OpenCode's Bun runtime reads it via libc, so the shim catches it) and scrubs `LD_PRELOAD`/`LD_LIBRARY_PATH` so bionic child tools (bash, git, ripgrep) don't choke on glibc. Shared with [claude-code-termux-native](https://github.com/Thr45hx/claude-code-termux-native). |
+
+No root, no proot, no reboot — DNS works immediately (unlike Go/musl agents whose resolvers bypass the shim).
+
+## Requirements
+- Termux on **aarch64 / arm64**
+- Internet on first run
+
+## Install
+```bash
+git clone https://github.com/Thr45hx/opencode-termux-native
+cd opencode-termux-native
+bash install.sh
+```
+or one-shot:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Thr45hx/opencode-termux-native/main/install.sh | bash
+```
+Then:
+```bash
+opencode providers      # add API keys (free models + HuggingFace built in)
+opencode                # TUI
+opencode run "..."       # one-shot
+```
+
+## Layout
+```
+~/agents/opencode/
+├── opencode      # glibc Bun binary (interpreter patchelf'd)
+└── launcher.sh   # ← $PREFIX/bin/opencode symlinks here
+$PREFIX/lib/claude-resolvfix.so   # DNS shim (shared)
+```
+
+## Files
+- `install.sh` — one-command installer (grabs the glibc arm64 build from GitHub releases)
+- `launcher.sh` → `$PREFIX/bin/opencode` — re-patchelf + shim + CA bundle
+- `fix_resolv.c` — the DNS shim source
+- `uninstall.sh`
+
+## Uninstall
+```bash
+bash uninstall.sh
+```
+
+---
+
+Unofficial — not affiliated with OpenCode. Provided as-is, no warranty.
