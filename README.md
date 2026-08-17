@@ -43,6 +43,17 @@ opencode                # TUI
 opencode run "..."       # one-shot
 ```
 
+## Updating
+
+```bash
+opencode update          # latest   (alias: opencode upgrade)
+opencode update 1.18.18  # a specific version
+```
+
+**Do not use OpenCode's own `upgrade` without this launcher.** Upstream's self-updater (the `curl` method) runs the OpenCode **install script**, which on Termux drops a fresh binary in `~/.opencode/bin` carrying the stock `/lib/ld-linux-aarch64.so.1` interpreter — **unrunnable here** — and prepends that dir to `PATH` in `~/.bashrc`, so your next shell silently picks the broken copy.
+
+This launcher **intercepts `update`/`upgrade`** and updates the native way instead: it downloads the glibc `arm64` release tarball straight into `~/agents/opencode/opencode` and re-patchelfs the interpreter — no `~/.opencode`, no `~/.bashrc` edits. `install.sh` also sets `"autoupdate": false` in `~/.config/opencode/opencode.jsonc` so the TUI/background updater can't re-trigger the upstream path.
+
 ## Layout
 ```
 ~/agents/opencode/
@@ -52,8 +63,8 @@ $PREFIX/lib/claude-resolvfix.so   # DNS shim (shared)
 ```
 
 ## Files
-- `install.sh` — one-command installer (grabs the glibc arm64 build from GitHub releases)
-- `launcher.sh` → `$PREFIX/bin/opencode` — re-patchelf + shim + CA bundle
+- `install.sh` — one-command installer (grabs the glibc arm64 build from GitHub releases; sets `autoupdate:false`)
+- `launcher.sh` → `$PREFIX/bin/opencode` — re-patchelf + shim + CA bundle + native `update`/`upgrade` interception
 - `fix_resolv.c` — the DNS shim source
 - `uninstall.sh`
 

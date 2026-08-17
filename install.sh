@@ -72,8 +72,29 @@ install -m755 "$oc" "$DIR/opencode"; rm -rf "$t"
 install -m755 "$SRC/launcher.sh" "$DIR/launcher.sh"
 ln -sf "$DIR/launcher.sh" "$PREFIX/bin/opencode"
 
+# Disable OpenCode's upstream self-updater. On Termux its `upgrade` (curl method)
+# runs the upstream install script, which drops a stock-interpreter binary in
+# ~/.opencode/bin (unrunnable here) and prepends it to PATH in ~/.bashrc, quietly
+# breaking the native install. The launcher intercepts `opencode update`/`upgrade`
+# and does it the native way (re-download + patchelf) instead; setting
+# autoupdate:false stops the TUI/background updater from re-triggering the bad path.
+CFG_DIR="$HOME_DIR/.config/opencode"; CFGJSONC="$CFG_DIR/opencode.jsonc"; CFGJSON="$CFG_DIR/opencode.json"
+if [ ! -f "$CFGJSONC" ] && [ ! -f "$CFGJSON" ]; then
+  mkdir -p "$CFG_DIR"
+  cat > "$CFGJSONC" <<'JSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false
+}
+JSON
+  say "Wrote $CFGJSONC (autoupdate disabled — update with 'opencode update')."
+elif ! grep -qs '"autoupdate"' "$CFGJSONC" "$CFGJSON" 2>/dev/null; then
+  say "TIP: add \"autoupdate\": false to your opencode config; update with 'opencode update'."
+fi
+
 say "Verifying…"
 if opencode --version >/dev/null 2>&1; then say "Installed OpenCode $(opencode --version 2>/dev/null | head -1) — native, no proot."; else say "Installed; run 'opencode'."; fi
 echo
-say "Auth:  opencode providers   (add API keys; free models + HuggingFace built in)"
-say "Run:   opencode             (TUI)   |   opencode run \"...\"   (one-shot)"
+say "Auth:   opencode providers   (add API keys; free models + HuggingFace built in)"
+say "Run:    opencode             (TUI)   |   opencode run \"...\"   (one-shot)"
+say "Update: opencode update      (native re-download + patchelf; never use upstream 'upgrade')"
