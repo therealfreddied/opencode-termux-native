@@ -30,13 +30,13 @@ esac
 
 say "Installing base packages (clang curl tar ca-certificates)…"
 pkg update -y >/dev/null 2>&1 || true
-pkg install -y clang curl tar ca-certificates >/dev/null || die "pkg install failed."
+pkg install -y clang curl tar ca-certificates >/dev/null 2>&1 || die "pkg install failed."
 
 if [ ! -f "$GLD" ] || [ ! -x "$GL/bin/patchelf" ] || [ ! -x "$GL/bin/ld" ]; then
   say "Enabling the Termux glibc repo + runtime…"
-  pkg install -y glibc-repo >/dev/null || die "glibc-repo failed."
-  pkg update -y >/dev/null 2>&1 || true
-  pkg install -y glibc patchelf-glibc binutils-glibc >/dev/null || die "glibc install failed."
+  pkg install -y glibc-repo >/dev/null 2>&1 || die "glibc-repo failed."
+pkg update -y >/dev/null 2>&1 || true
+pkg install -y glibc patchelf-glibc binutils-glibc >/dev/null 2>&1 || die "glibc install failed."
 fi
 
 [ -f "$GLD" ] || die "glibc loader missing: $GLD"
