@@ -28,13 +28,13 @@ No root, no proot, no reboot — DNS works immediately (unlike Go/musl agents wh
 
 ## Install
 ```bash
-git clone https://github.com/Thr45hx/opencode-termux-native
+git clone https://github.com/therealfreddied/opencode-termux-native
 cd opencode-termux-native
 bash install.sh
 ```
 or one-shot:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Thr45hx/opencode-termux-native/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/therealfreddied/opencode-termux-native/refs/heads/main/install.sh | bash
 ```
 Then:
 ```bash
