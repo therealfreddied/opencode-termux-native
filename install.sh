@@ -52,7 +52,7 @@ DIR="$HOME_DIR/agents/opencode"
 BIN="$DIR/opencode"
 LAUNCHER="$DIR/launcher.sh"
 
-# Exact OC Remote path confirmed by its error message.
+# Exact OC Remote path shown by its Local Server error.
 OC_REMOTE_DIR="$HOME_DIR/opencode-local"
 OC_REMOTE_START="$OC_REMOTE_DIR/start.sh"
 
@@ -75,7 +75,7 @@ pkg install -y clang curl tar ca-certificates >/dev/null 2>&1 \
   || die "pkg install failed."
 
 if [ ! -f "$GLD" ] || [ ! -x "$GL/bin/patchelf" ] || [ ! -x "$GL/bin/ld" ]; then
-  say "Installing the Termux glibc runtime and patching tools..."
+  say "Installing Termux glibc runtime and patching tools..."
 
   pkg install -y glibc-repo >/dev/null 2>&1 \
     || die "glibc-repo installation failed."
@@ -136,6 +136,7 @@ EOF
 
   (
     cd "$BUILD_DIR"
+
     clang \
       --target=aarch64-linux-gnu \
       -fPIC \
@@ -154,6 +155,7 @@ EOF
   ) || die "DNS resolver shim build failed."
 
   install -m 644 "$BUILD_DIR/libclaude-resolvfix.so" "$SHIM"
+
   rm -rf "$BUILD_DIR"
   trap - EXIT
 fi
@@ -188,7 +190,9 @@ download_install_opencode() {
 
   say "Downloading OpenCode glibc ARM64${requested_version:+ v${requested_version#v}}..."
 
-  if ! curl -fL --retry 3 --retry-delay 2 "$url" -o "$temp_dir/opencode.tar.gz"; then
+  if ! curl -fL --retry 3 --retry-delay 2 \
+    "$url" \
+    -o "$temp_dir/opencode.tar.gz"; then
     rm -rf "$temp_dir"
     die "Download failed: $url"
   fi
@@ -215,14 +219,14 @@ download_install_opencode() {
     die "Failed to patch the OpenCode ELF interpreter."
   fi
 
-  # Test with the resolver shim before changing the currently working binary.
+  # Verify the new patched binary before replacing the current working one.
   if ! LD_PRELOAD="$SHIM" "$new_binary" --version >/dev/null 2>&1; then
     rm -f "$new_binary"
     rm -rf "$temp_dir"
-    die "The newly downloaded OpenCode binary could not start under Termux glibc. Existing installation was not changed."
+    die "Downloaded OpenCode binary could not start under Termux glibc. Existing installation was not changed."
   fi
 
-  # Preserve one rollback generation before replacing the live binary.
+  # Keep one rollback copy before replacing the active binary.
   if [ -x "$BIN" ]; then
     cp -f "$BIN" "$DIR/opencode.previous"
   fi
@@ -236,8 +240,11 @@ download_install_opencode() {
 REQUESTED_VERSION="${1:-}"
 download_install_opencode "$REQUESTED_VERSION"
 
-# OpenCode launcher. This is what /data/.../usr/bin/opencode points at.
-# It handles safe updates and supplies LD_PRELOAD when starting OpenCode.
+# This is what normal `opencode` calls through the symlink at:
+#
+#   /data/data/com.termux/files/usr/bin/opencode
+#
+# It supplies the resolver shim and safely performs upgrades/rollbacks.
 cat > "$LAUNCHER" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -287,13 +294,16 @@ update_opencode() {
 
   say "Downloading update${requested_version:+ v${requested_version#v}}..."
 
-  curl -fL --retry 3 --retry-delay 2 "$url" -o "$temp_dir/opencode.tar.gz" \
+  curl -fL --retry 3 --retry-delay 2 \
+    "$url" \
+    -o "$temp_dir/opencode.tar.gz" \
     || die "Download failed: $url"
 
   tar -xzf "$temp_dir/opencode.tar.gz" -C "$temp_dir" \
     || die "Archive extraction failed."
 
   extracted_binary="$(find "$temp_dir" -type f -name opencode -print -quit)"
+
   [ -n "$extracted_binary" ] \
     || die "No executable named 'opencode' was found in the archive."
 
@@ -357,12 +367,18 @@ EOF
 chmod 755 "$LAUNCHER"
 ln -sfn "$LAUNCHER" "$PREFIX/bin/opencode"
 
-# This is the exact path OC Remote attempts to execute when you toggle its
-# Local Server switch:
+# ---------------------------------------------------------------------------
+# OC Remote compatibility launcher
+#
+# OC Remote's Local Server switch expects this exact executable:
 #
 #   /data/data/com.termux/files/home/opencode-local/start.sh
 #
-# The app should own the foreground process, so do not use nohup or tmux here.
+# Create the parent directory BEFORE redirecting the here-document into it.
+# The server stays in the foreground because OC Remote owns its lifecycle.
+# ---------------------------------------------------------------------------
+mkdir -p "$OC_REMOTE_DIR"
+
 cat > "$OC_REMOTE_START" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -391,7 +407,7 @@ EOF
 
 chmod 755 "$OC_REMOTE_START"
 
-# Preserve/update normal OpenCode configuration without overwriting user config.
+# Preserve your existing OpenCode config. Create a minimal one only if absent.
 CFG_DIR="$HOME_DIR/.config/opencode"
 CFGJSONC="$CFG_DIR/opencode.jsonc"
 CFGJSON="$CFG_DIR/opencode.json"
@@ -408,10 +424,10 @@ EOF
 
   say "Wrote $CFGJSONC."
 elif ! grep -qs '"autoupdate"' "$CFGJSONC" "$CFGJSON" 2>/dev/null; then
-  warn "TIP: add "autoupdate": false to your OpenCode config."
+  warn 'TIP: add "autoupdate": false to your OpenCode config.'
 fi
 
-say "Verifying the regular OpenCode launcher..."
+say "Verifying the normal OpenCode launcher..."
 
 if opencode --version >/dev/null 2>&1; then
   say "OpenCode installed: $(opencode --version | head -n 1)"
@@ -429,7 +445,7 @@ fi
 
 echo
 say "Run TUI:      opencode"
-say "Run one-shot: opencode run "your prompt""
+say 'Run one-shot: opencode run "your prompt"'
 say "Update:       opencode update"
 say "Pin version:  opencode update 1.18.31"
 say "Rollback:     opencode rollback"
