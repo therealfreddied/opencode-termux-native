@@ -9,18 +9,18 @@
 #   opencode update [VERSION]
 #   opencode rollback
 #
-# Also creates the exact launcher OC Remote expects:
+# Creates the OC Remote local-server control scripts:
 #
 #   $HOME/opencode-local/start.sh
+#   $HOME/opencode-local/stop.sh
 #
-# OC Remote calls that script to start:
+# OC Remote local server:
 #
-#   OpenCode server at http://127.0.0.1:4096
+#   http://127.0.0.1:4096
 #
 
 set -euo pipefail
 
-# Do not allow Termux's libtermux-exec hook to affect clang or glibc tools.
 unset LD_PRELOAD
 
 say() {
@@ -52,9 +52,9 @@ DIR="$HOME_DIR/agents/opencode"
 BIN="$DIR/opencode"
 LAUNCHER="$DIR/launcher.sh"
 
-# Exact OC Remote path shown by its Local Server error.
 OC_REMOTE_DIR="$HOME_DIR/opencode-local"
 OC_REMOTE_START="$OC_REMOTE_DIR/start.sh"
+OC_REMOTE_STOP="$OC_REMOTE_DIR/stop.sh"
 
 REPO="anomalyco/opencode"
 ASSET="opencode-linux-arm64.tar.gz"
@@ -70,11 +70,22 @@ case "$(uname -m)" in
 esac
 
 say "Installing base packages..."
-pkg update -y >/dev/null 2>&1 || true
-pkg install -y clang curl tar ca-certificates >/dev/null 2>&1 \
-  || die "pkg install failed."
 
-if [ ! -f "$GLD" ] || [ ! -x "$GL/bin/patchelf" ] || [ ! -x "$GL/bin/ld" ]; then
+pkg update -y >/dev/null 2>&1 || true
+
+pkg install -y \
+  clang \
+  curl \
+  tar \
+  ca-certificates \
+  psmisc \
+  >/dev/null 2>&1 \
+  || die "Termux package installation failed."
+
+if [ ! -f "$GLD" ] || \
+   [ ! -x "$GL/bin/patchelf" ] || \
+   [ ! -x "$GL/bin/ld" ]; then
+
   say "Installing Termux glibc runtime and patching tools..."
 
   pkg install -y glibc-repo >/dev/null 2>&1 \
@@ -82,16 +93,27 @@ if [ ! -f "$GLD" ] || [ ! -x "$GL/bin/patchelf" ] || [ ! -x "$GL/bin/ld" ]; then
 
   pkg update -y >/dev/null 2>&1 || true
 
-  pkg install -y glibc patchelf-glibc binutils-glibc >/dev/null 2>&1 \
+  pkg install -y \
+    glibc \
+    patchelf-glibc \
+    binutils-glibc \
+    >/dev/null 2>&1 \
     || die "glibc, patchelf-glibc, or binutils-glibc installation failed."
 fi
 
-[ -f "$GLD" ] || die "Termux glibc loader is missing: $GLD"
-[ -x "$GL/bin/patchelf" ] || die "patchelf is missing: $GL/bin/patchelf"
-[ -x "$GL/bin/ld" ] || die "glibc linker is missing: $GL/bin/ld"
+[ -f "$GLD" ] \
+  || die "Termux glibc loader is missing: $GLD"
 
-# Build the resolver shim once. It redirects glibc's /etc/resolv.conf lookup
-# to Termux's resolver file.
+[ -x "$GL/bin/patchelf" ] \
+  || die "patchelf is missing: $GL/bin/patchelf"
+
+[ -x "$GL/bin/ld" ] \
+  || die "glibc linker is missing: $GL/bin/ld"
+
+# ---------------------------------------------------------------------------
+# Build DNS resolver shim
+# ---------------------------------------------------------------------------
+
 if [ ! -f "$SHIM" ]; then
   say "Building DNS resolver shim..."
 
@@ -118,18 +140,32 @@ static const char *redirect_path(const char *path) {
 }
 
 int open(const char *pathname, int flags, ...) {
-    if (!orig_open) orig_open = dlsym(RTLD_NEXT, "open");
+    if (!orig_open) {
+        orig_open = dlsym(RTLD_NEXT, "open");
+    }
+
     return orig_open(redirect_path(pathname), flags);
 }
 
 int openat(int dirfd, const char *pathname, int flags, ...) {
-    if (!orig_openat) orig_openat = dlsym(RTLD_NEXT, "openat");
+    if (!orig_openat) {
+        orig_openat = dlsym(RTLD_NEXT, "openat");
+    }
+
     return orig_openat(dirfd, redirect_path(pathname), flags);
 }
 
-int execve(const char *pathname, char *const argv[], char *const envp[]) {
-    if (!orig_execve) orig_execve = dlsym(RTLD_NEXT, "execve");
+int execve(
+    const char *pathname,
+    char *const argv[],
+    char *const envp[]
+) {
+    if (!orig_execve) {
+        orig_execve = dlsym(RTLD_NEXT, "execve");
+    }
+
     unsetenv("LD_PRELOAD");
+
     return orig_execve(pathname, argv, envp);
 }
 EOF
@@ -160,7 +196,13 @@ EOF
   trap - EXIT
 fi
 
-if [ ! -s "$RESOLV" ] || ! grep -q '^nameserver' "$RESOLV" 2>/dev/null; then
+# ---------------------------------------------------------------------------
+# Termux resolver file
+# ---------------------------------------------------------------------------
+
+if [ ! -s "$RESOLV" ] || \
+   ! grep -q '^nameserver' "$RESOLV" 2>/dev/null; then
+
   say "Creating Termux resolver configuration..."
 
   mkdir -p "$(dirname "$RESOLV")"
@@ -170,6 +212,10 @@ nameserver 1.1.1.1
 nameserver 8.8.8.8
 EOF
 fi
+
+# ---------------------------------------------------------------------------
+# OpenCode binary installation
+# ---------------------------------------------------------------------------
 
 download_install_opencode() {
   local requested_version="${1:-}"
@@ -193,6 +239,7 @@ download_install_opencode() {
   if ! curl -fL --retry 3 --retry-delay 2 \
     "$url" \
     -o "$temp_dir/opencode.tar.gz"; then
+
     rm -rf "$temp_dir"
     die "Download failed: $url"
   fi
@@ -202,7 +249,9 @@ download_install_opencode() {
     die "Failed to extract the OpenCode archive."
   fi
 
-  extracted_binary="$(find "$temp_dir" -type f -name opencode -print -quit)"
+  extracted_binary="$(
+    find "$temp_dir" -type f -name opencode -print -quit
+  )"
 
   if [ -z "$extracted_binary" ]; then
     rm -rf "$temp_dir"
@@ -213,20 +262,27 @@ download_install_opencode() {
 
   install -m 755 "$extracted_binary" "$new_binary"
 
-  if ! "$GL/bin/patchelf" --set-interpreter "$GLD" "$new_binary"; then
+  if ! "$GL/bin/patchelf" \
+    --set-interpreter "$GLD" \
+    "$new_binary"; then
+
     rm -f "$new_binary"
     rm -rf "$temp_dir"
     die "Failed to patch the OpenCode ELF interpreter."
   fi
 
-  # Verify the new patched binary before replacing the current working one.
-  if ! LD_PRELOAD="$SHIM" "$new_binary" --version >/dev/null 2>&1; then
+  # Verify before replacing the active binary.
+  if ! LD_PRELOAD="$SHIM" \
+    "$new_binary" \
+    --version \
+    >/dev/null 2>&1; then
+
     rm -f "$new_binary"
     rm -rf "$temp_dir"
+
     die "Downloaded OpenCode binary could not start under Termux glibc. Existing installation was not changed."
   fi
 
-  # Keep one rollback copy before replacing the active binary.
   if [ -x "$BIN" ]; then
     cp -f "$BIN" "$DIR/opencode.previous"
   fi
@@ -240,11 +296,10 @@ download_install_opencode() {
 REQUESTED_VERSION="${1:-}"
 download_install_opencode "$REQUESTED_VERSION"
 
-# This is what normal `opencode` calls through the symlink at:
-#
-#   /data/data/com.termux/files/usr/bin/opencode
-#
-# It supplies the resolver shim and safely performs upgrades/rollbacks.
+# ---------------------------------------------------------------------------
+# Normal OpenCode launcher
+# ---------------------------------------------------------------------------
+
 cat > "$LAUNCHER" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 
@@ -302,7 +357,9 @@ update_opencode() {
   tar -xzf "$temp_dir/opencode.tar.gz" -C "$temp_dir" \
     || die "Archive extraction failed."
 
-  extracted_binary="$(find "$temp_dir" -type f -name opencode -print -quit)"
+  extracted_binary="$(
+    find "$temp_dir" -type f -name opencode -print -quit
+  )"
 
   [ -n "$extracted_binary" ] \
     || die "No executable named 'opencode' was found in the archive."
@@ -311,13 +368,19 @@ update_opencode() {
 
   install -m 755 "$extracted_binary" "$new_binary"
 
-  "$GL/bin/patchelf" --set-interpreter "$GLD" "$new_binary" \
+  "$GL/bin/patchelf" \
+    --set-interpreter "$GLD" \
+    "$new_binary" \
     || {
       rm -f "$new_binary"
       die "patchelf failed. Existing OpenCode was kept."
     }
 
-  if ! LD_PRELOAD="$SHIM" "$new_binary" --version >/dev/null 2>&1; then
+  if ! LD_PRELOAD="$SHIM" \
+    "$new_binary" \
+    --version \
+    >/dev/null 2>&1; then
+
     rm -f "$new_binary"
     die "New OpenCode build failed verification. Existing OpenCode was kept."
   fi
@@ -368,15 +431,9 @@ chmod 755 "$LAUNCHER"
 ln -sfn "$LAUNCHER" "$PREFIX/bin/opencode"
 
 # ---------------------------------------------------------------------------
-# OC Remote compatibility launcher
-#
-# OC Remote's Local Server switch expects this exact executable:
-#
-#   /data/data/com.termux/files/home/opencode-local/start.sh
-#
-# Create the parent directory BEFORE redirecting the here-document into it.
-# The server stays in the foreground because OC Remote owns its lifecycle.
+# OC Remote start/stop scripts
 # ---------------------------------------------------------------------------
+
 mkdir -p "$OC_REMOTE_DIR"
 
 cat > "$OC_REMOTE_START" <<'EOF'
@@ -407,7 +464,30 @@ EOF
 
 chmod 755 "$OC_REMOTE_START"
 
-# Preserve your existing OpenCode config. Create a minimal one only if absent.
+cat > "$OC_REMOTE_STOP" <<'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+
+set -euo pipefail
+
+PORT="${OPENCODE_PORT:-4096}"
+
+# Ask only OpenCode server processes using this port to terminate.
+pkill -TERM -f "opencode.*serve.*--port $PORT" 2>/dev/null || true
+
+sleep 1
+
+# Optional fallback if psmisc/fuser is installed.
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k "${PORT}/tcp" 2>/dev/null || true
+fi
+EOF
+
+chmod 755 "$OC_REMOTE_STOP"
+
+# ---------------------------------------------------------------------------
+# OpenCode configuration
+# ---------------------------------------------------------------------------
+
 CFG_DIR="$HOME_DIR/.config/opencode"
 CFGJSONC="$CFG_DIR/opencode.jsonc"
 CFGJSON="$CFG_DIR/opencode.json"
@@ -427,7 +507,11 @@ elif ! grep -qs '"autoupdate"' "$CFGJSONC" "$CFGJSON" 2>/dev/null; then
   warn 'TIP: add "autoupdate": false to your OpenCode config.'
 fi
 
-say "Verifying the normal OpenCode launcher..."
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
+
+say "Verifying normal OpenCode launcher..."
 
 if opencode --version >/dev/null 2>&1; then
   say "OpenCode installed: $(opencode --version | head -n 1)"
@@ -435,13 +519,16 @@ else
   die "OpenCode installed but failed version verification."
 fi
 
-say "Verifying the OC Remote launcher path..."
+say "Verifying OC Remote scripts..."
 
-if [ -x "$OC_REMOTE_START" ]; then
-  say "OC Remote launcher created: $OC_REMOTE_START"
-else
-  die "OC Remote launcher was not created correctly."
-fi
+[ -x "$OC_REMOTE_START" ] \
+  || die "OC Remote start script was not created: $OC_REMOTE_START"
+
+[ -x "$OC_REMOTE_STOP" ] \
+  || die "OC Remote stop script was not created: $OC_REMOTE_STOP"
+
+say "OC Remote start script: $OC_REMOTE_START"
+say "OC Remote stop script:  $OC_REMOTE_STOP"
 
 echo
 say "Run TUI:      opencode"
@@ -449,5 +536,5 @@ say 'Run one-shot: opencode run "your prompt"'
 say "Update:       opencode update"
 say "Pin version:  opencode update 1.18.31"
 say "Rollback:     opencode rollback"
-say "OC Remote:    Toggle Local Server; it launches $OC_REMOTE_START"
+say "OC Remote:    Toggle Local Server"
 say "Server URL:   http://127.0.0.1:4096"
